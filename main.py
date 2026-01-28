@@ -77,6 +77,36 @@ def authenticate_user(token_file, scopes, account_name_for_prompt):
 def clean_filename(text):
     return re.sub(r'[\\/:*?"<>|]', '-', text)
 
+# ★ 加筆：字幕クリーニング関数 (WebVTT → 簡易SBV風)
+def clean_vtt_to_sbv_style(vtt_text):
+    # 1. ヘッダーと不要なメタデータの削除
+    text = vtt_text.replace("WEBVTT\n", "").replace("WEBVTT", "")
+    
+    # 2. タイムスタンプの整形 (00:00:04.810 --> 00:00:08.850 ... -> 0:00:04.810,0:00:08.850)
+    def format_timestamp(match):
+        start = match.group(1).lstrip('0')
+        if not start or start.startswith(':'): start = '0' + start
+        end = match.group(2).lstrip('0')
+        if not end or end.startswith(':'): end = '0' + end
+        return f"\n{start},{end}"
+
+    # タイムラインの後の align:start 等のオプションを削除しつつ書式変換
+    text = re.sub(r"(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3}).*", format_timestamp, text)
+    
+    # 3. 単語レベルのタグ <00:00:00.000> や <c> などを削除
+    text = re.sub(r"<[^>]+>", "", text)
+    
+    # 4. 重複行の整理 (自動生成字幕特有の重複を抑制)
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped: continue
+        if not cleaned_lines or stripped != cleaned_lines[-1]:
+            cleaned_lines.append(stripped)
+            
+    return "\n".join(cleaned_lines)
+
 # ==========================================
 # ■ メイン処理
 # ==========================================
@@ -102,9 +132,9 @@ def main():
         print(f"❌ スプレッドシート読み込みエラー: {e}")
         return
 
-    # ★テスト用に3件で停止するように設定しています
+    # ★テスト用に2件で停止するように設定しています
     check_count = 0
-    CHECK_LIMIT = 3 
+    CHECK_LIMIT = 2
 
     print(f"\n📋 データ処理を開始します (上限: {CHECK_LIMIT}件)")
 
@@ -136,7 +166,6 @@ def main():
             # --- [ブランド権限] 字幕を探す ---
             captions = youtube_service.captions().list(part='id,snippet', videoId=video_id).execute()
             
-            # ★変更点: 字幕データがない場合の処理を追加
             if not captions.get('items'):
                 print("   -> ⚠ 字幕データなし (スプレッドシートに記録します)")
                 sheets_service.spreadsheets().values().update(
@@ -159,6 +188,9 @@ def main():
             # --- [ブランド権限] ダウンロード ---
             req = youtube_service.captions().download(id=target['id'], tfmt='vtt')
             subtitle_content = req.execute().decode('utf-8')
+            
+            # ★ 加筆：ダウンロードした字幕をSBV風にクリーニング
+            subtitle_content = clean_vtt_to_sbv_style(subtitle_content)
             
             # --- [メイン権限] ドライブ保存 ---
             raw_filename = f"{date}_{title}"
