@@ -77,12 +77,13 @@ def authenticate_user(token_file, scopes, account_name_for_prompt):
 def clean_filename(text):
     return re.sub(r'[\\/:*?"<>|]', '-', text)
 
-# ★ 加筆：字幕クリーニング関数 (WebVTT → 簡易SBV風)
+# --- [新規追加] 字幕クリーニング関数 (WebVTT → 簡易SBV風) ---
 def clean_vtt_to_sbv_style(vtt_text):
-    # 1. ヘッダーと不要なメタデータの削除
+    # 1. ヘッダー削除
     text = vtt_text.replace("WEBVTT\n", "").replace("WEBVTT", "")
     
-    # 2. タイムスタンプの整形 (00:00:04.810 --> 00:00:08.850 ... -> 0:00:04.810,0:00:08.850)
+    # 2. タイムスタンプの整形とメタデータの削除
+    # 00:00:04.810 --> 00:00:08.850 align:start ... -> 0:00:04.810,0:00:08.850
     def format_timestamp(match):
         start = match.group(1).lstrip('0')
         if not start or start.startswith(':'): start = '0' + start
@@ -90,20 +91,19 @@ def clean_vtt_to_sbv_style(vtt_text):
         if not end or end.startswith(':'): end = '0' + end
         return f"\n{start},{end}"
 
-    # タイムラインの後の align:start 等のオプションを削除しつつ書式変換
     text = re.sub(r"(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3}).*", format_timestamp, text)
     
-    # 3. 単語レベルのタグ <00:00:00.000> や <c> などを削除
+    # 3. 単語レベルのタイムスタンプタグ <00:00:00.000> や <c> タグを削除
     text = re.sub(r"<[^>]+>", "", text)
     
-    # 4. 重複行の整理 (自動生成字幕特有の重複を抑制)
+    # 4. 行の整理と重複排除 (ASR特有の繰り返しを抑制)
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
-        stripped = line.strip()
-        if not stripped: continue
-        if not cleaned_lines or stripped != cleaned_lines[-1]:
-            cleaned_lines.append(stripped)
+        s = line.strip()
+        if not s: continue
+        if not cleaned_lines or s != cleaned_lines[-1]:
+            cleaned_lines.append(s)
             
     return "\n".join(cleaned_lines)
 
@@ -132,14 +132,13 @@ def main():
         print(f"❌ スプレッドシート読み込みエラー: {e}")
         return
 
-    # ★テスト用に2件で停止するように設定しています
+    # ★テスト用に3件で停止するように設定しています
     check_count = 0
-    CHECK_LIMIT = 2
+    CHECK_LIMIT = 3 
 
     print(f"\n📋 データ処理を開始します (上限: {CHECK_LIMIT}件)")
 
     for i, row in enumerate(rows):
-        # F列に既に何か書いてあればスキップ (ID または '字幕データなし')
         if len(row) >= 6 and row[5]: 
             continue 
         
@@ -189,7 +188,7 @@ def main():
             req = youtube_service.captions().download(id=target['id'], tfmt='vtt')
             subtitle_content = req.execute().decode('utf-8')
             
-            # ★ 加筆：ダウンロードした字幕をSBV風にクリーニング
+            # --- [新規加筆] クリーニング実行 ---
             subtitle_content = clean_vtt_to_sbv_style(subtitle_content)
             
             # --- [メイン権限] ドライブ保存 ---
